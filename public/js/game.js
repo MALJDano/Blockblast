@@ -5,9 +5,10 @@ const blockContainer = document.getElementById("block-container");
 const boardSize = 10;
 let score = 0;
 let grid = [];
+let cellColors = []; // store colors of placed blocks
 let shapesInPlay = [];
+let currentPreview = [];
 
-// Define shape options
 const SHAPES = [
   [[1]],
   [[1, 1]],
@@ -20,14 +21,19 @@ const SHAPES = [
   [[1, 1, 1, 1]]
 ];
 
-// Create the game board
+const COLORS = ['#ff5722', '#4caf50', '#9c27b0', '#ffc107', '#00bcd4', '#e91e63'];
+
 function createBoard() {
   grid = [];
+  cellColors = [];
   board.innerHTML = '';
   for (let y = 0; y < boardSize; y++) {
     grid[y] = [];
+    cellColors[y] = [];
     for (let x = 0; x < boardSize; x++) {
       grid[y][x] = 0;
+      cellColors[y][x] = null;
+
       const cell = document.createElement("div");
       cell.classList.add("cell");
       cell.dataset.row = y;
@@ -37,30 +43,31 @@ function createBoard() {
   }
 }
 
-// Update UI board
 function updateBoardUI() {
   document.querySelectorAll("#game-board .cell").forEach(cell => {
     const y = parseInt(cell.dataset.row);
     const x = parseInt(cell.dataset.col);
     if (grid[y][x] === 1) {
       cell.classList.add("filled");
+      cell.style.backgroundColor = cellColors[y][x];
     } else {
       cell.classList.remove("filled");
+      cell.style.backgroundColor = '';
     }
   });
 }
 
-// Generate 3 new blocks
 function generateBlocks() {
   blockContainer.innerHTML = '';
   shapesInPlay = [];
 
   while (shapesInPlay.length < 3) {
-    const rand = SHAPES[Math.floor(Math.random() * SHAPES.length)];
-    shapesInPlay.push(rand);
+    const randShape = SHAPES[Math.floor(Math.random() * SHAPES.length)];
+    const color = COLORS[Math.floor(Math.random() * COLORS.length)];
+    shapesInPlay.push({ shape: randShape, color });
   }
 
-  shapesInPlay.forEach(shape => {
+  shapesInPlay.forEach(({ shape, color }) => {
     const block = document.createElement("div");
     block.classList.add("block");
     block.style.gridTemplateColumns = `repeat(${shape[0].length}, 30px)`;
@@ -70,22 +77,26 @@ function generateBlocks() {
       row.forEach(val => {
         const cell = document.createElement("div");
         cell.classList.add("cell");
-        if (val === 1) cell.classList.add("filled");
+        if (val === 1) {
+          cell.style.backgroundColor = color;
+        }
         block.appendChild(cell);
       });
     });
 
     block.draggable = true;
     block.dataset.shape = JSON.stringify(shape);
+    block.dataset.color = color;
+
     block.addEventListener("dragstart", e => {
-      e.dataTransfer.setData("text/plain", JSON.stringify(shape));
+      e.dataTransfer.setData("shape", block.dataset.shape);
+      e.dataTransfer.setData("color", block.dataset.color);
     });
 
     blockContainer.appendChild(block);
   });
 }
 
-// Can we place this shape at this location?
 function canPlaceShape(shape, startX, startY) {
   for (let y = 0; y < shape.length; y++) {
     for (let x = 0; x < shape[0].length; x++) {
@@ -103,48 +114,49 @@ function canPlaceShape(shape, startX, startY) {
   return true;
 }
 
-// Place shape, update score, then check lines
-function placeShape(shape, startX, startY) {
+function placeShape(shape, startX, startY, color) {
   let placedCount = 0;
-
   for (let y = 0; y < shape.length; y++) {
     for (let x = 0; x < shape[0].length; x++) {
       if (shape[y][x] === 1) {
         const gx = startX + x;
         const gy = startY + y;
         grid[gy][gx] = 1;
+        cellColors[gy][gx] = color;
         placedCount++;
       }
     }
   }
 
-  score += placedCount; // +1 per cell
+  score += placedCount;
   checkLines();
   updateBoardUI();
   scoreDisplay.textContent = score;
 
-  // Remove used block from container
   const blocks = Array.from(blockContainer.children);
   const used = blocks.find(b => b.dataset.shape === JSON.stringify(shape));
   if (used) used.remove();
 
-  // If all 3 used, regenerate
   if (blockContainer.children.length === 0) {
     generateBlocks();
   }
 }
 
-// Clear full rows or columns
 function checkLines() {
-  // Rows
+  let linesCleared = 0;
+  const popCells = [];
+
   for (let y = 0; y < boardSize; y++) {
     if (grid[y].every(cell => cell === 1)) {
-      grid[y] = new Array(boardSize).fill(0);
-      score += 10;
+      linesCleared++;
+      for (let x = 0; x < boardSize; x++) {
+        grid[y][x] = 0;
+        cellColors[y][x] = null;
+        popCells.push(`[data-row="${y}"][data-col="${x}"]`);
+      }
     }
   }
 
-  // Columns
   for (let x = 0; x < boardSize; x++) {
     let full = true;
     for (let y = 0; y < boardSize; y++) {
@@ -154,30 +166,76 @@ function checkLines() {
       }
     }
     if (full) {
+      linesCleared++;
       for (let y = 0; y < boardSize; y++) {
         grid[y][x] = 0;
+        cellColors[y][x] = null;
+        popCells.push(`[data-row="${y}"][data-col="${x}"]`);
       }
-      score += 10;
     }
   }
+
+  popCells.forEach(selector => {
+    const cell = document.querySelector(`#game-board .cell${selector}`);
+    if (cell) {
+      cell.classList.add("popping");
+      setTimeout(() => cell.classList.remove("popping"), 300);
+    }
+  });
+
+  score += linesCleared * 10;
+  scoreDisplay.textContent = score;
 }
 
-// Drop logic
-board.addEventListener("dragover", e => e.preventDefault());
+// Preview logic
+board.addEventListener("dragover", e => {
+  e.preventDefault();
+  clearPreview();
 
+  const shape = JSON.parse(e.dataTransfer.getData("shape"));
+  const rect = board.getBoundingClientRect();
+  const x = Math.floor((e.clientX - rect.left) / 42);
+  const y = Math.floor((e.clientY - rect.top) / 42);
+
+  if (canPlaceShape(shape, x, y)) {
+    for (let i = 0; i < shape.length; i++) {
+      for (let j = 0; j < shape[i].length; j++) {
+        if (shape[i][j] === 1) {
+          const cell = document.querySelector(
+            `.cell[data-row="${y + i}"][data-col="${x + j}"]`
+          );
+          if (cell) {
+            cell.classList.add("preview");
+            currentPreview.push(cell);
+          }
+        }
+      }
+    }
+  }
+});
+
+function clearPreview() {
+  currentPreview.forEach(cell => cell.classList.remove("preview"));
+  currentPreview = [];
+}
+
+board.addEventListener("dragleave", clearPreview);
 board.addEventListener("drop", e => {
   e.preventDefault();
-  const shape = JSON.parse(e.dataTransfer.getData("text/plain"));
+  clearPreview();
+
+  const shape = JSON.parse(e.dataTransfer.getData("shape"));
+  const color = e.dataTransfer.getData("color");
+
   const rect = board.getBoundingClientRect();
   const offsetX = Math.floor((e.clientX - rect.left) / 42);
   const offsetY = Math.floor((e.clientY - rect.top) / 42);
 
   if (canPlaceShape(shape, offsetX, offsetY)) {
-    placeShape(shape, offsetX, offsetY);
+    placeShape(shape, offsetX, offsetY, color);
   }
 });
 
-// Reset game
 function resetGame() {
   createBoard();
   generateBlocks();
@@ -185,6 +243,5 @@ function resetGame() {
   scoreDisplay.textContent = score;
 }
 
-// Init
 createBoard();
 generateBlocks();
